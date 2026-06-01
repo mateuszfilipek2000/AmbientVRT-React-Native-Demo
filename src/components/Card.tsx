@@ -11,10 +11,10 @@ export function Card(): React.ReactElement {
     <View
       style={[
         styles.card,
-        { backgroundColor: theme.surface, borderColor: theme.border },
+        { backgroundColor: theme.accent, borderColor: theme.accent },
       ]}
     >
-      <Text style={[styles.title, { color: theme.text }]}>{strings.greeting}</Text>
+      <Text style={[styles.title, { color: theme.accentText }]}>{strings.greeting}</Text>
       <Text style={[styles.subtitle, { color: theme.textMuted }]}>
         {strings.subtitle}
       </Text>
