@@ -1,0 +1,86 @@
+name: Bless baselines
+
+# One-shot bootstrap: capture the stories in the canonical gate environment and
+# commit the resulting PNGs as the blessed baselines on the default branch.
+#
+# RN/Chromium screenshots are only byte-reproducible within a matched
+# environment, so the goldens must be captured here (x64, this exact image)
+# rather than on a developer laptop. Run this once (Actions tab -> "Bless
+# baselines" -> Run workflow) before opening PRs; afterwards the visual gate has
+# something to compare against. Re-run it whenever you intentionally accept a new
+# look on the default branch.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: bless-baselines
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  bless:
+    name: ambient accept
+    runs-on: ubuntu-latest
+    container: ghcr.io/cirruslabs/flutter:3.44.0
+    env:
+      AMBIENT_CAPTURE_ENV: ambient-rn-local
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trust workspace
+        run: git config --global --add safe.directory '*'
+
+      - name: Fetch AmbientVRT engine + RN adapter (private)
+        env:
+          AMBIENT_REPO_TOKEN: ${{ secrets.AMBIENT_REPO_TOKEN }}
+        run: |
+          git clone --depth 1 --branch main \
+            "https://x-access-token:${AMBIENT_REPO_TOKEN}@github.com/mateuszfilipek2000/AmbientVRT.git" \
+            .engine
+
+      - name: Build ambient engine binary
+        run: .engine/tool/build.sh --output "$RUNNER_TEMP/ambient"
+
+      - name: Install Node.js 20
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl gnupg
+          curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+          apt-get install -y --no-install-recommends nodejs
+          rm -rf /var/lib/apt/lists/*
+
+      - name: Build RN capture adapter
+        working-directory: .engine/js
+        env:
+          AMBIENT_BINARY_PATH: ${{ runner.temp }}/ambient
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Playwright Chromium + system deps
+        working-directory: .engine/js
+        run: npx playwright install --with-deps chromium
+
+      - name: Install app dependencies
+        run: npm ci
+
+      - name: Build Storybook
+        run: npm run build-storybook
+
+      - name: Capture + accept baselines
+        run: |
+          "$RUNNER_TEMP/ambient" accept --config ambient.config.yaml
+
+      - name: Commit baselines to the default branch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .ambient/baselines
+          if git diff --cached --quiet; then
+            echo 'Baselines already up to date; nothing to commit.'
+            exit 0
+          fi
+          git commit -m 'Bless RN baselines (captured in CI)'
+          git push origin HEAD:${GITHUB_REF_NAME}

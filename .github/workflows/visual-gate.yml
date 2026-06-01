@@ -1,0 +1,106 @@
+name: Visual gate
+
+# AmbientVRT visual-regression gate for this React Native / Storybook demo.
+#
+# On the default branch and every PR it re-captures each Storybook story (across
+# the light/dark theme variants) with Playwright/Chromium, compares them against
+# the committed baselines in .ambient/baselines/, fails the check on any
+# unaccepted visual change, and uploads report.html + the diff PNGs as an
+# artifact.
+#
+# The AmbientVRT package itself is private. CI reaches it with a read-only
+# Personal Access Token (the AMBIENT_REPO_TOKEN repository secret) to clone the
+# package repo into ./.engine, where it builds both the standalone `ambient`
+# engine binary and the `ambient-rn-capture` adapter.
+#
+# Baselines are branch-aware: the committed baselines live in the default-branch
+# namespace, so a pull_request run (which sets GITHUB_BASE_REF) compares against
+# them. A raw feature-branch push has no base ref and would flag everything as
+# "new", so push only runs on the default branch.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: visual-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  visual:
+    name: ambient test
+    runs-on: ubuntu-latest
+    # Same image RN baselines are captured in: the pinned Dart/Flutter toolchain
+    # (used to build the engine binary) plus, after the Node install below, the
+    # Playwright/Chromium capture path. Matching the capture-env keeps re-captures
+    # byte-identical to the committed baselines.
+    container: ghcr.io/cirruslabs/flutter:3.44.0
+    env:
+      AMBIENT_CAPTURE_ENV: ambient-rn-local
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trust workspace
+        run: git config --global --add safe.directory '*'
+
+      - name: Fetch AmbientVRT engine + RN adapter (private)
+        env:
+          AMBIENT_REPO_TOKEN: ${{ secrets.AMBIENT_REPO_TOKEN }}
+        run: |
+          git clone --depth 1 --branch main \
+            "https://x-access-token:${AMBIENT_REPO_TOKEN}@github.com/mateuszfilipek2000/AmbientVRT.git" \
+            .engine
+
+      - name: Build ambient engine binary
+        run: .engine/tool/build.sh --output "$RUNNER_TEMP/ambient"
+
+      # The Flutter image ships no usable Node; install Node 20 (Storybook 10 /
+      # Vite 7 need 20+) from NodeSource so it works on real runners and under act.
+      - name: Install Node.js 20
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl gnupg
+          curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+          apt-get install -y --no-install-recommends nodejs
+          rm -rf /var/lib/apt/lists/*
+          node --version && npm --version
+
+      # Build the RN capture adapter. AMBIENT_BINARY_PATH makes its postinstall
+      # vendor the engine binary we just built instead of fetching a release.
+      - name: Build RN capture adapter
+        working-directory: .engine/js
+        env:
+          AMBIENT_BINARY_PATH: ${{ runner.temp }}/ambient
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Playwright Chromium + system deps
+        working-directory: .engine/js
+        run: npx playwright install --with-deps chromium
+
+      - name: Install app dependencies
+        run: npm ci
+
+      - name: Build Storybook
+        run: npm run build-storybook
+
+      # Capture stories -> compare against committed baselines -> write report.
+      # A nonzero exit on changed / unaccepted-new snapshots is the red check.
+      - name: ambient test
+        run: |
+          "$RUNNER_TEMP/ambient" test \
+            --config ambient.config.yaml \
+            --report-dir .ambient/report
+
+      - name: Upload report + diffs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ambient-report
+          path: .ambient/report
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,0 +1,12 @@
+node_modules/
+storybook-static/
+*.log
+.storybook-out/
+
+# AmbientVRT's engine + capture adapter, cloned from the (private) package repo
+# by CI. Never committed.
+.engine/
+
+# Report output is regenerated each run; the baselines under .ambient/baselines
+# ARE committed (they're the blessed goldens the gate compares against).
+.ambient/report/
