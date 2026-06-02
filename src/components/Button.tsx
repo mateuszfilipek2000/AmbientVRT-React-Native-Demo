@@ -11,6 +11,13 @@ export interface ButtonProps {
   disabled?: boolean;
 }
 
+/**
+ * Themed pressable button used across the Button and Card stories.
+ *
+ * Documentation-only change: the rendered output is unchanged, so the visual
+ * gate re-captures every story, finds them identical to the baselines, and
+ * stays green.
+ */
 export function Button({
   label,
   variant = 'primary',
